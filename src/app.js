@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const eventRoutes = require("./routes/eventRoutes");
 const ticketRoutes = require("./routes/ticketRoutes");
+const uploadRoutes = require("./routes/upload");
 require("dotenv").config();
 
 const app = express();
@@ -18,6 +19,7 @@ app.get("/", (req, res) => {
 // API Routes
 app.use("/api/events", eventRoutes);
 app.use("/api/tickets", ticketRoutes);
+app.use("/api/upload", uploadRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
