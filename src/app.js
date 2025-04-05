@@ -3,6 +3,7 @@ const cors = require("cors");
 const eventRoutes = require("./routes/eventRoutes");
 const ticketRoutes = require("./routes/ticketRoutes");
 const uploadRoutes = require("./routes/upload");
+const totalPriceRoutes = require("./routes/totalPriceRoutes");
 require("dotenv").config();
 
 const app = express();
@@ -20,6 +21,7 @@ app.get("/", (req, res) => {
 app.use("/api/events", eventRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/totalPrice", totalPriceRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

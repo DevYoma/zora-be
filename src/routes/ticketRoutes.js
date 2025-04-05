@@ -18,90 +18,151 @@ router.post("/verify-code", ticketController.verifyTicketByCode);
 
 // ============================================================================
 
-// POST /api/tickets/purchase - Purchase a ticket
-router.post('/purchase', async (req, res) => {
-  try {
-    const { 
-      eventId, 
-      buyerAddress, 
-      transactionHash,
-      price
-    } = req.body;
-    
-    if (!eventId || !buyerAddress) {
-      return res.status(400).json({ error: 'Missing required fields' });
+// GET /api/tickets/events
+  router.get("/events", async (req, res) => {
+    try {
+      // Fetch all events
+      const { data: events, error: eventsError } = await supabase
+        .from("events")
+        .select("*");
+
+      if (eventsError) {
+        console.error("Error fetching events:", eventsError);
+        return res.status(500).json({ error: eventsError.message });
+      }
+
+      // Fetch all tickets
+      const { data: tickets, error: ticketsError } = await supabase
+        .from("tickets")
+        .select("event_id, owner_address");
+
+      if (ticketsError) {
+        console.error("Error fetching tickets:", ticketsError);
+        return res.status(500).json({ error: ticketsError.message });
+      }
+
+      // Combine events with ticket and attendee data
+      const eventsWithStats = events.map((event) => {
+        // Filter tickets for the current event
+        const eventTickets = tickets.filter(
+          (ticket) => ticket.event_id === event.id
+        );
+
+        // Calculate tickets sold
+        const ticketsSold = event.ticket_quantity - event.available_tickets;
+
+        // Calculate unique attendees
+        const uniqueAttendees = new Set(
+          eventTickets.map((ticket) => ticket.owner_address)
+        ).size;
+
+        return {
+          ...event,
+          ticketsSold,
+          uniqueAttendees,
+        };
+      });
+
+      // Respond with events and attendees
+      res.json(eventsWithStats);
+    } catch (error) {
+      console.error("Error fetching events:", error);
+      res.status(500).json({ error: "Failed to fetch events" });
     }
-    
-    // Check if event exists and has available tickets
+  });
+
+// POST /api/tickets/purchase - Purchase a ticket
+router.post("/purchase", async (req, res) => {
+  const {
+    eventId,
+    ownerAddress,
+    purchase_transaction_hash,
+    tokenId, // Include tokenId from the request body
+    quantity,
+  } = req.body;
+
+  try {
+    // 1. Check if the event exists and has available tickets
     const { data: event, error: eventError } = await supabase
-      .from('events')
-      .select('*')
-      .eq('id', eventId)
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
       .single();
-      
+
     if (eventError) {
-      console.error('Error fetching event:', eventError);
+      console.error("Error fetching event:", eventError);
       return res.status(500).json({ error: eventError.message });
     }
-    
+
     if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
+      return res.status(404).json({ error: "Event not found" });
     }
-    
-    if (event.available_tickets <= 0) {
-      return res.status(400).json({ error: 'No tickets available' });
+
+    if (event.available_tickets < quantity) {
+      return res.status(400).json({ error: "Not enough tickets available" });
     }
-    
-    // Check if user already has a ticket for this event
+
+    // 2. Check if the user already has a ticket for this event
     const { data: existingTicket, error: checkError } = await supabase
-      .from('tickets')
-      .select('id')
-      .eq('event_id', eventId)
-      .eq('buyer_address', buyerAddress)
+      .from("tickets")
+      .select("id")
+      .eq("event_id", eventId)
+      .eq("owner_address", ownerAddress)
       .single();
-      
+
+    if (checkError && checkError.code !== "PGRST116") {
+      // Ignore "No rows found" error (PGRST116), as it means no ticket exists
+      console.error("Error checking existing ticket:", checkError);
+      return res.status(500).json({ error: checkError.message });
+    }
+
     if (existingTicket) {
-      return res.status(400).json({ error: 'You already have a ticket for this event' });
+      return res
+        .status(400)
+        .json({ error: "You already have a ticket for this event" });
     }
-    
-    // Create ticket record
-    const { data: ticket, error } = await supabase
-      .from('tickets')
-      .insert([{ 
-        event_id: eventId, 
-        buyer_address: buyerAddress,
-        transaction_hash: transactionHash,
-        price: price || event.ticket_price,
-        purchase_date: new Date().toISOString(),
-        is_used: false
-      }])
-      .select();
-      
-    if (error) {
-      console.error('Error creating ticket:', error);
-      return res.status(500).json({ error: error.message });
+
+    // 3. Create a ticket record
+    const { data: ticket, error: ticketError } = await supabase
+      .from("tickets")
+      .insert([
+        {
+          event_id: eventId,
+          owner_address: ownerAddress,
+          purchase_transaction_hash,
+          token_id: tokenId || Date.now(), // Generate token_id if not provided
+          is_used: false,
+        },
+      ])
+      .select()
+      .single();
+
+    if (ticketError) {
+      console.error("Error creating ticket:", ticketError);
+      return res.status(500).json({ error: ticketError.message });
     }
-    
-    // Decrement available tickets
-    const { error: updateError } = await supabase.rpc('decrement_available_tickets', { 
-      p_event_id: eventId 
-    });
-    
+
+    // 4. Decrement available tickets
+    const { error: updateError } = await supabase.rpc(
+      "decrement_available_tickets",
+      { p_event_id: eventId, p_quantity: quantity }
+    );
+
     if (updateError) {
-      console.error('Error updating available tickets:', updateError);
-      // Don't return error here, as the ticket purchase was successful
+      console.error("Error updating available tickets:", updateError);
+      // Don't return an error here, as the ticket purchase was successful
     }
-    
-    res.json({ 
-      success: true, 
-      ticketId: ticket[0].id
+
+    // Respond with success and ticket ID
+    res.json({
+      success: true,
+      ticketId: ticket.id,
     });
   } catch (error) {
-    console.error('Error purchasing ticket:', error);
+    console.error("Error purchasing ticket:", error);
     res.status(500).json({ error: error.message });
   }
 });
-
 
 // GET /api/tickets/user/:address - Get ticket by buyer address
 router.get("/user/:address", async (req, res) => {
