@@ -151,28 +151,15 @@ exports.getTicketsByOwner = async (req, res) => {
 // Verify ticket by code (ID, token_id, or owner_address)
 exports.verifyTicketByCode = async (req, res) => {
   try {
-    const { data: sampleTicket, error: sampleError } = await supabase
-      .from("tickets")
-      .select("*")
-      .limit(1);
-
-    if (sampleTicket && sampleTicket.length > 0) {
-      console.log("Ticket table columns:", Object.keys(sampleTicket[0]));
-      console.log("Sample ticket data:", sampleTicket[0]);
-    } else {
-      console.log("No tickets found or error:", sampleError);
-    }
-  } catch (e) {
-    console.error("Error checking schema:", e);
-  }
-  try {
     const { code } = req.body;
 
     if (!code) {
-      return res.status(400).json({ error: "Verification code is required" });
+      return res.status(400).json({
+        valid: false,
+        errorType: "MISSING_CODE",
+        message: "Verification code is required",
+      });
     }
-
-    console.log("Verifying code:", code);
 
     // Build the query based on the code
     let query = supabase.from("tickets").select(`
@@ -195,35 +182,35 @@ exports.verifyTicketByCode = async (req, res) => {
     const uuidPattern =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidPattern.test(code)) {
-      console.log("Treating as UUID ticket ID");
       query = query.eq("id", code);
     }
     // Check if code looks like an Ethereum address
     else if (code.startsWith("0x")) {
-      console.log("Treating as wallet address");
-      // Use ilike for case-insensitive text comparison
       query = query.ilike("owner_address", code);
     }
     // Otherwise treat as token_id
     else {
-      console.log("Treating as token ID");
       query = query.eq("token_id", code);
     }
 
     // Execute the query
     const { data, error } = await query.maybeSingle();
 
-    console.log("Query result:", data, error);
-
     if (error) {
       console.error("Error verifying ticket:", error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({
+        valid: false,
+        errorType: "DATABASE_ERROR",
+        message: "Error verifying ticket: " + error.message,
+      });
     }
 
     if (!data) {
       return res.status(404).json({
         valid: false,
-        message: "Ticket not found",
+        errorType: "TICKET_NOT_FOUND",
+        message:
+          "Ticket does not exist. Please check the ID or wallet address and try again.",
       });
     }
 
@@ -231,7 +218,10 @@ exports.verifyTicketByCode = async (req, res) => {
     if (data.is_used) {
       return res.status(400).json({
         valid: false,
-        message: "Ticket has already been used",
+        errorType: "TICKET_ALREADY_USED",
+        message:
+          "This ticket has already been used on " +
+          new Date(data.used_at).toLocaleString(),
         usedAt: data.used_at,
       });
     }
@@ -247,7 +237,11 @@ exports.verifyTicketByCode = async (req, res) => {
 
     if (updateError) {
       console.error("Error marking ticket as used:", updateError);
-      return res.status(500).json({ error: updateError.message });
+      return res.status(500).json({
+        valid: false,
+        errorType: "UPDATE_ERROR",
+        message: "Error marking ticket as used: " + updateError.message,
+      });
     }
 
     // Return data in the format expected by the frontend
@@ -261,6 +255,10 @@ exports.verifyTicketByCode = async (req, res) => {
     });
   } catch (error) {
     console.error("Error verifying ticket:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      valid: false,
+      errorType: "SERVER_ERROR",
+      message: "Server error: " + error.message,
+    });
   }
 };
